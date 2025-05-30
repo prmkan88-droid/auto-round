@@ -1650,7 +1650,7 @@ class AutoRound(object):
         # only support to export afp8
         if self.act_bits <= 8:
             if "fp8" not in self.act_data_type or self.act_dynamic:
-                if format != "fake":
+                if format not in ("llmcompressor", "fake"):
                     logger.warning(
                         f"Currently only support to export auto_round format quantized model"
                         " with fp8 dtype activation for activation quantization."
