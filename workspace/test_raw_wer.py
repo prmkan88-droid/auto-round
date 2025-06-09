@@ -6,7 +6,8 @@ import aiohttp
 from evaluate import load
 
 
-model_name = 'openai/whisper-large-v3' # 0.97973
+model_name = 'openai/whisper-large-v3' # raw model: 0.97973
+
 processor = WhisperProcessor.from_pretrained(model_name)
 model = WhisperForConditionalGeneration.from_pretrained(model_name)
 # dataset

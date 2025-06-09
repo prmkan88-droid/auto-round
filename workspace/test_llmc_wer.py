@@ -2,13 +2,15 @@ from vllm.assets.audio import AudioAsset
 from vllm import LLM, SamplingParams
 
 
-model_id = "RedHatAI/whisper-large-v3-quantized.w8a8"  # autoround exports the same format
+model_id = "RedHatAI/whisper-large-v3-quantized.w8a8"   # w8a8+fp8_kv: 0.49343
 # RESPONSE:  And the 0-1 pitcher on the way to Edgar Martinez. Swung on the line down the left field line for a base hit. Here comes Joy. Here is Junior to third base. They're going to wave him in. The throw to the plate will be late. The Mariners are going to
 
 # model = "/home/sdp/auto-round/workspace/rtn_whisper_large_v3_turbo/"
 # RESPONSE:  And the 0-1 pitcher on the way to Edgar Martinez. Swung on the line down the left field line for a base hit. Here comes Joy. Here is Junior to third base. They're going to wave him in. The throw to the plate will be late. The Mariners are going to
 
 
+# 1. w8a8: 
+# 2. w8a8+fp8_KV: 
 
 # prepare model
 llm = LLM(
@@ -78,7 +80,13 @@ def eval_func(model):
 
         reference = processor.tokenizer._normalize(batch['text'])
         references.append(reference)
-        outputs = llm.generate(inputs, SamplingParams(temperature=0.0, top_p=1.0), use_tqdm=False)
+        outputs = llm.generate(
+            inputs, 
+            SamplingParams(
+                temperature=0.0, top_p=1.0, max_tokens=448,
+            ), 
+            use_tqdm=False
+        )
         prediction = outputs[0].outputs[0].text
         prediction = processor.tokenizer._normalize(prediction)
         predictions.append(prediction)

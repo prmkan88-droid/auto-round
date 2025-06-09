@@ -6,6 +6,9 @@ model_id = "./rtn_whisper_large_v3"
 # model_id = "./atrd_whisper_large_v3"
 
 
+# 1. raw: 
+# 2. raw+fp8_KV: 
+
 # prepare model
 llm = LLM(
     model=model_id,
@@ -74,7 +77,13 @@ def eval_func(model):
 
         reference = processor.tokenizer._normalize(batch['text'])
         references.append(reference)
-        outputs = llm.generate(inputs, SamplingParams(temperature=0.0, top_p=1.0), use_tqdm=False)
+        outputs = llm.generate(
+            inputs, 
+            SamplingParams(
+                temperature=0.0, top_p=1.0, max_tokens=448,
+            ), 
+            use_tqdm=False
+        )
         prediction = outputs[0].outputs[0].text
         prediction = processor.tokenizer._normalize(prediction)
         predictions.append(prediction)

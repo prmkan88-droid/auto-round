@@ -5,6 +5,12 @@ from vllm import LLM, SamplingParams
 model_id = "openai/whisper-large-v3" # 0.97973
 # model_id = "./atrd_whisper_large_v3"
 
+# 10 samples
+# 1. raw: 0.99602
+# 2. raw+fp8_KV: 0.99602
+
+# 1. raw: 
+# 2. raw+fp8_KV: 
 
 # prepare model
 llm = LLM(
@@ -60,7 +66,11 @@ def eval_func(model):
     processor = WhisperProcessor.from_pretrained(model_id)
     predictions = []
     references = []
+    num=0
     for batch in tqdm(librispeech_test_clean):
+        num+=1
+        if num > 10:
+            break
         audio = batch["audio"]
         inputs = {  # Test explicit encoder/decoder prompt
             "encoder_prompt": {
@@ -74,13 +84,20 @@ def eval_func(model):
 
         reference = processor.tokenizer._normalize(batch['text'])
         references.append(reference)
-        outputs = llm.generate(inputs, SamplingParams(temperature=0.0, top_p=1.0), use_tqdm=False)
+        outputs = llm.generate(
+            inputs, 
+            SamplingParams(
+                temperature=0.0, top_p=1.0, max_tokens=448,
+            ), 
+            use_tqdm=False
+        )
         prediction = outputs[0].outputs[0].text
         prediction = processor.tokenizer._normalize(prediction)
         predictions.append(prediction)
 
     # metric
     wer = load("wer")
+    breakpoint()
     wer_result = wer.compute(references=references, predictions=predictions)
     print(f"Result wer: {wer_result * 100}")
     accuracy = 1 - wer_result
