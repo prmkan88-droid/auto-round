@@ -17,15 +17,12 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(
 model.to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 processor = AutoProcessor.from_pretrained(model_id)
-dataloader = Dataloader(processor, model, n_samples=20)
-
-
-
+dataloader = Dataloader(processor, model, n_samples=128)
 
 ## quantize the model
 autoround = AutoRoundMLLM(model, tokenizer, processor,
                         bits=bits, group_size=group_size, sym=sym, act_bits=act_bits,
-                        iters=1,
+                        # iters=0,
                         dataset=dataloader,
                         batch_size=dataloader.batch_size,
                         nsamples=dataloader.n_samples,
@@ -39,10 +36,10 @@ autoround = AutoRoundMLLM(model, tokenizer, processor,
                         },
                     )
 autoround.quantize()
-print(autoround.model)
+# print(autoround.model)
 # breakpoint()
 
 # save the quantized model, set format='auto_gptq' or 'auto_awq' to use other formats
 output_dir = "./atrd_whisper_large_v3"
 autoround.save_quantized(output_dir, format='llmcompressor', inplace=True)
-print(autoround.model)
+# print(autoround.model)
