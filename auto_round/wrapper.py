@@ -369,7 +369,10 @@ class WrapperWALayer(torch.nn.Module):
     def __init__(self, orig_layer):
         super(WrapperWALayer, self).__init__()
         self.orig_layer = orig_layer
+        self.data_type = orig_layer.data_type
+        self.act_data_type = orig_layer.act_data_type
         self.act_quant_func = self.orig_layer.act_quant_func
+        self.extra_repr_org = orig_layer.extra_repr
 
     def forward(self, x):
         act_max = self.orig_layer.act_max if hasattr(self.orig_layer, "act_max") else None
@@ -380,6 +383,9 @@ class WrapperWALayer(torch.nn.Module):
                                                  data_type=self.orig_layer.act_data_type,
                                                  tensor_max=act_max)
         return self.orig_layer.forward(x)
+
+    def extra_repr(self):
+        return f"{self.extra_repr_org()}, weight_type={self.data_type}, act_data_type={self.act_data_type}"
 
 
 class WrapperLayerNorm(torch.nn.Module):

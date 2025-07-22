@@ -2046,6 +2046,23 @@ class AutoRound(object):
                 hook_handles.append(hook)
         return hook_handles
 
+    def build_optimizer_lr_schedule(self, round_params, minmax_params, alpha=1.0):
+        lr = self.lr * alpha
+        if self.enable_minmax_tuning:
+            optimizer = self.optimizer(
+                [{"params": round_params}, {"params": minmax_params, "lr": self.minmax_lr}], lr=lr, weight_decay=0
+            )
+        else:
+            optimizer = self.optimizer(round_params, lr=lr, weight_decay=0)
+
+        if self.lr_scheduler is None:
+            lr_schedule = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=1.0, end_factor=0.0, total_iters=self.iters
+            )
+        else:
+            lr_schedule = copy.deepcopy(self.lr_scheduler)
+        return optimizer, lr_schedule
+
     def quant_block(self, block, input_ids, input_others, q_input=None, device=torch.device("cpu")):
         """Quantize the weights of a given block of the model.
 
@@ -2101,20 +2118,22 @@ class AutoRound(object):
 
         round_params = []
         minmax_params = []
+        fp8_round_params = []
+        fp8_minmax_params = []
         for n, m in block.named_modules():
             if hasattr(m, "orig_layer"):
-                for key in m.params.keys():
-                    if "min" in key or "max" in key:
-                        minmax_params.append(m.params[key])
-                    else:
-                        round_params.append(m.params[key])
-
-        if self.enable_minmax_tuning:
-            optimizer = self.optimizer(
-                [{"params": round_params}, {"params": minmax_params, "lr": self.minmax_lr}], lr=self.lr, weight_decay=0
-            )
-        else:
-            optimizer = self.optimizer(round_params, lr=self.lr, weight_decay=0)
+                if m.orig_layer.data_type == "mx_fp8":
+                    for key in m.params.keys():
+                        if "min" in key or "max" in key:
+                            fp8_minmax_params.append(m.params[key])
+                        else:
+                            fp8_round_params.append(m.params[key])
+                else:
+                    for key in m.params.keys():
+                        if "min" in key or "max" in key:
+                            minmax_params.append(m.params[key])
+                        else:
+                            round_params.append(m.params[key])
 
         if len(round_params) + len(minmax_params) <= 0:
             dump_info = (
@@ -2123,13 +2142,9 @@ class AutoRound(object):
             )
             logger.info(dump_info)
             return output, output
-
-        if self.lr_scheduler is None:
-            lr_schedule = torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=1.0, end_factor=0.0, total_iters=self.iters
-            )
-        else:
-            lr_schedule = copy.deepcopy(self.lr_scheduler)
+        
+        optimizer, lr_schedule = self.build_optimizer_lr_schedule(round_params, minmax_params, alpha=1.0)
+        fp8_optimizer, fp8_lr_schedule = self.build_optimizer_lr_schedule(fp8_round_params, fp8_minmax_params, alpha=3.0)
 
         nsamples = len(input_ids)
         pick_samples = self.batch_size * self.gradient_accumulate_steps
@@ -2203,6 +2218,7 @@ class AutoRound(object):
                 if 0 < self.dynamic_max_gap <= i - last_best_iter:
                     break
             self.step(scaler, optimizer, lr_schedule)
+            self.step(scaler, fp8_optimizer, fp8_lr_schedule)
 
         last_loss = total_loss
         best_iter = self.iters
