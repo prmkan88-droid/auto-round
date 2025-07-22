@@ -2144,7 +2144,9 @@ class AutoRound(object):
             return output, output
         
         optimizer, lr_schedule = self.build_optimizer_lr_schedule(round_params, minmax_params, alpha=1.0)
-        fp8_optimizer, fp8_lr_schedule = self.build_optimizer_lr_schedule(fp8_round_params, fp8_minmax_params, alpha=3.0)
+        ATRD_MP_ALPHA = float(os.environ.get("ATRD_MP_ALPHA", 2.0))
+        logger.info("ATRD_MP_ALPHA", ATRD_MP_ALPHA)
+        fp8_optimizer, fp8_lr_schedule = self.build_optimizer_lr_schedule(fp8_round_params, fp8_minmax_params, alpha=ATRD_MP_ALPHA)
 
         nsamples = len(input_ids)
         pick_samples = self.batch_size * self.gradient_accumulate_steps
