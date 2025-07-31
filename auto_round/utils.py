@@ -34,6 +34,11 @@ from auto_round.export.export_to_gguf.config import GGUF_CONFIG, GGML_QUANT_SIZE
 SHARED_CACHE_KEYS = ("position_ids", "cache_position", "position_embeddings")
 
 
+deepspeed_exists = False
+if importlib.util.find_spec("deepspeed"):  # check if deepspeed is installed
+    deepspeed_exists = True
+
+
 class SupportedFormats:
     def __init__(self):
         self._support_format = (
@@ -53,11 +58,15 @@ class SupportedFormats:
         return self._support_list[key]
 
 
+SUPPORTED_DTYPES = ("int", "mx_fp", "fp", "nv_fp")
 SUPPORTED_FORMATS = SupportedFormats()
-
 SUPPORTED_LAYER_TYPES = (torch.nn.Linear, transformers.pytorch_utils.Conv1D)
 
-SUPPORTED_DTYPES = ("int", "mx_fp", "fp", "nv_fp")
+if deepspeed_exists:
+    from deepspeed.module_inject import LinearLayer, LinearAllreduce
+    SUPPORTED_LAYER_TYPES = (torch.nn.Linear, transformers.pytorch_utils.Conv1D, LinearLayer, LinearAllreduce)
+
+
 
 
 def infer_bits_by_data_type(data_type: str):
@@ -1167,6 +1176,8 @@ def get_layer_features(layer):
         return layer.weight.shape[0], layer.weight.shape[1]
     elif isinstance(layer, torch.nn.Embedding):
         return layer.num_embeddings, layer.embedding_dim
+    elif deepspeed_exists and isinstance(layer, (LinearLayer, LinearAllreduce)):
+        return layer.weight.shape[1], layer.weight.shape[0]  # (input_dim, output_dim)
     return None, None  # Unsupported layer type
 
 
