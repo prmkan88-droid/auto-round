@@ -402,8 +402,8 @@ class WrapperWALayer(torch.nn.Module):
     def __init__(self, orig_layer):
         super(WrapperWALayer, self).__init__()
         self.orig_layer = orig_layer
-        self.data_type = orig_layer.data_type
-        self.act_data_type = orig_layer.act_data_type
+        self.data_type = orig_layer.data_type if hasattr(orig_layer, "data_type") else None
+        self.act_data_type = orig_layer.act_data_type if hasattr(orig_layer, "act_data_type") else None
         self.act_quant_func = self.orig_layer.act_quant_func
         self.extra_repr_org = orig_layer.extra_repr
 
