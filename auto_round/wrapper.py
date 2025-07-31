@@ -17,18 +17,19 @@ import transformers
 from torch.functional import F
 
 from auto_round.data_type import get_quant_func
+
 from .utils import (
-    check_to_quantized,
-    get_scale_shape,
-    set_module,
-    logger,
     SUPPORTED_LAYER_TYPES,
+    check_to_quantized,
     deepspeed_exists,
+    get_scale_shape,
+    logger,
+    set_module,
 )
 
 if deepspeed_exists:
-    from deepspeed.module_inject import LinearLayer, LinearAllreduce
     from deepspeed import comm as dist
+    from deepspeed.module_inject import LinearAllreduce, LinearLayer
 
 
 def reshape_and_pad_tensor(v, group_size=-1):
@@ -106,7 +107,9 @@ class WrapperLinear(torch.nn.Module):
             else:
                 self.orig_forward = self.conv1d_forward
         else:
-            self.orig_forward = self.linear_forward if isinstance(self.orig_layer, torch.nn.Linear) else self.conv1d_forward
+            self.orig_forward = (
+                self.linear_forward if isinstance(self.orig_layer, torch.nn.Linear) else self.conv1d_forward
+            )
 
     def _init_tuning_params_and_quant_func(self):
         """Initializes tuning parameters and quantization functions.

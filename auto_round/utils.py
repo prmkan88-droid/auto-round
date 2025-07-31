@@ -72,10 +72,9 @@ SUPPORTED_FORMATS = SupportedFormats()
 SUPPORTED_LAYER_TYPES = (torch.nn.Linear, transformers.pytorch_utils.Conv1D)
 
 if deepspeed_exists:
-    from deepspeed.module_inject import LinearLayer, LinearAllreduce
+    from deepspeed.module_inject import LinearAllreduce, LinearLayer
+
     SUPPORTED_LAYER_TYPES = SUPPORTED_LAYER_TYPES + (LinearLayer, LinearAllreduce)
-
-
 
 
 def infer_bits_by_data_type(data_type: str):
