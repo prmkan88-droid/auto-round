@@ -64,7 +64,7 @@ SUPPORTED_LAYER_TYPES = (torch.nn.Linear, transformers.pytorch_utils.Conv1D)
 
 if deepspeed_exists:
     from deepspeed.module_inject import LinearLayer, LinearAllreduce
-    SUPPORTED_LAYER_TYPES = (torch.nn.Linear, transformers.pytorch_utils.Conv1D, LinearLayer, LinearAllreduce)
+    SUPPORTED_LAYER_TYPES = SUPPORTED_LAYER_TYPES + (LinearLayer, LinearAllreduce)
 
 
 
