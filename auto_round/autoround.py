@@ -1293,6 +1293,24 @@ class AutoRound(object):
                 cnt = 1
             cnt += 1
 
+    def _dump_target_bits(self, use_layer_config=True):
+        lm_head_name = get_lm_head_name(self.model)
+        total_numel = 0
+        total_bits = 0
+        for n, m in self.model.named_modules():
+            if isinstance(m, SUPPORTED_LAYER_TYPES):
+                m_numel = m.weight.numel()
+                if use_layer_config:
+                    m_bits = self.layer_config[n]["bits"] if n in self.layer_config else self.bits
+                else:
+                    m_bits = m.bits
+                if lm_head_name == n and m_bits in [16, 32]:
+                    logger.info("skip lm_head when collecting target bits")
+                    continue
+                total_numel += m_numel
+                total_bits += m_numel * m_bits
+        logger.info(f"current target bits is {round(total_bits/total_numel, 3)}")
+
     def quantize(self):
         """Quantize the model and return the quantized model along with layer configurations.The entry of AutoRound.
         Returns:
@@ -1302,6 +1320,7 @@ class AutoRound(object):
             m.tmp_name = n
         self._check_compatibility()
         self.has_qlayer_outside_block = self.set_layerwise_config(self.layer_config)
+        self._dump_target_bits()  # leverage updated self.layer_config
         if not hasattr(self, "formats"):
             logger.warning("this API is deprecated, please use `quantize_and_save` instead")
         else:
@@ -1410,13 +1429,15 @@ class AutoRound(object):
                     f"but got {len(self.formats)} formats."
                 )
 
-        self.quant_layers(layer_names, all_inputs)  ##TODO pack layer immediately
+        # self.quant_layers(layer_names, all_inputs)  ##TODO pack layer immediately
+        self.quant_layers(layer_names, {})  ##TODO pack layer immediately
 
         end_time = time.time()
         cost_time = end_time - self.start_time
         logger.info(f"quantization tuning time {cost_time}")
 
         ## dump a summary
+        self._dump_target_bits(use_layer_config=False)
         quantized_layers = []
         unquantized_layers = []
         for n, m in self.model.named_modules():
@@ -2190,6 +2211,23 @@ class AutoRound(object):
                     continue
         return hook_handles
 
+    def build_optimizer_lr_schedule(self, round_params, minmax_params, alpha=1.0):
+        lr = self.lr * alpha
+        if self.enable_minmax_tuning:
+            optimizer = self.optimizer(
+                [{"params": round_params}, {"params": minmax_params, "lr": self.minmax_lr}], lr=lr, weight_decay=0
+            )
+        else:
+            optimizer = self.optimizer(round_params, lr=lr, weight_decay=0)
+
+        if self.lr_scheduler is None:
+            lr_schedule = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=1.0, end_factor=0.0, total_iters=self.iters
+            )
+        else:
+            lr_schedule = copy.deepcopy(self.lr_scheduler)
+        return optimizer, lr_schedule
+
     def quant_block(self, block, input_ids, input_others, q_input=None, device=torch.device("cpu")):
         """Quantize the weights of a given block of the model.
 
@@ -2249,30 +2287,159 @@ class AutoRound(object):
                 clear_memory()
             input_ids = q_input
 
+        @torch.no_grad()
+        def get_loss(block):
+            total_step = 3
+            total_loss = 0
+            mse_loss = torch.nn.MSELoss(reduction="sum").to(device)
+            for tmp_step in range(total_step):
+                nsamples = len(input_ids)
+                whole_indices = torch.randperm(nsamples)
+                assert nsamples > total_step * self.batch_size, f"please make sure nsamples > {total_step} * self.batch_size"
+                indices = whole_indices[tmp_step * self.batch_size : (tmp_step + 1) * self.batch_size]
+                current_input_ids, current_input_others = AutoRound.sampling_inputs(
+                    input_ids,
+                    input_others,
+                    indices,
+                    seqlen=self.seqlen,
+                    batch_dim=self.batch_dim,
+                    share_cache_keys=self.shared_cache_keys,
+                )
+
+                current_output = [output[x] for x in indices]
+                current_output = torch.cat(current_output, dim=self.batch_dim)
+
+                current_output = to_device(current_output, device)
+
+                output_q = block_forward(
+                    block, current_input_ids, current_input_others, self.amp, self.amp_dtype, device
+                )
+                loss = mse_loss(  # pylint: disable=not-callable
+                    output_q.to(torch.float32), current_output.to(torch.float32)
+                )
+                total_loss += loss
+            if is_optimum_habana_available():
+                htcore.mark_step()
+            return total_loss
+
+        def create_block(block, hp_layers):
+            for layer_name in hp_layers:
+                layer = get_module(block, layer_name)
+                layer.data_type, layer.bits, layer.sym = 'mx_fp8', 8, True
+                layer.act_data_type, layer.act_bits, layer.act_sym = 'mx_fp8', 8, True
+            for n, m in block.named_modules():
+                if isinstance(m, SUPPORTED_LAYER_TYPES):
+                    if check_to_quantized(m):
+                        new_m = WrapperLinear(
+                            m,
+                            enable_minmax_tuning=False,
+                            enable_norm_bias_tuning=False,
+                            device=device,
+                        )
+                        set_module(block, n, new_m)
+            if is_optimum_habana_available():
+                htcore.mark_step()
+            return block
+
+        def recover_block(block, hp_layers):
+            for n, m in block.named_modules():
+                if isinstance(m, WrapperLinear):
+                    set_module(block, n, m.orig_layer)
+            for layer_name in hp_layers:
+                layer = get_module(block, layer_name)
+                layer.data_type, layer.bits, layer.sym = 'mx_fp4', 4, True
+                layer.act_data_type, layer.act_bits, layer.act_sym = 'mx_fp4', 4, True
+            if is_optimum_habana_available():
+                htcore.mark_step()
+            return block
+
+        def get_numel(block, hp_layers):
+            numel = 0
+            for layer_name in hp_layers:
+                layer = get_module(block, layer_name)
+                numel += layer.weight.numel()
+            return numel
+
+        def get_best_combination(combination_list, numel_list, loss_list):
+            # Get ranks for numel_list and 
+            ATRD_LOSS_RATIO = float(os.environ.get("ATRD_LOSS_RATIO", 1.5))
+            numel_ranks = [sorted(numel_list).index(x) for x in numel_list]
+            loss_ranks = [(sorted(loss_list).index(x)) * ATRD_LOSS_RATIO for x in loss_list]
+
+            # Calculate rank sums
+            rank_sums = [x + y for x, y in zip(numel_ranks, loss_ranks)]
+            logger.debug(f"numel_ranks: {numel_ranks}")
+            logger.debug(f"loss_ranks: {loss_ranks}")
+            logger.debug(f"rank sum: {rank_sums}")
+
+            # Find the index of the smallest rank sum
+            best_index = rank_sums.index(min(rank_sums))
+
+            # Return the best combination
+            return combination_list[best_index]
+    
+
+        quantized_layers = [n for n, m in block.named_modules() if isinstance(m, SUPPORTED_LAYER_TYPES)]
+        from itertools import combinations
+        import gc
+        
+        combination_list = []
+        numel_list = []
+        loss_list = []
+        ATRD_FP8_NUM = int(os.environ.get("ATRD_FP8_NUM", 3))
+        for hp_layers in combinations(quantized_layers, ATRD_FP8_NUM):
+            cur_block =  block
+            combination_list.append(hp_layers)
+            # get numel
+            numel = get_numel(cur_block, hp_layers)
+            numel_list.append(numel)
+            # get loss
+            cur_block = create_block(cur_block, hp_layers)
+            loss = get_loss(cur_block)
+            loss_list.append(loss)
+            block = recover_block(cur_block, hp_layers)
+            gc.collect()
+            if is_optimum_habana_available():
+                htcore.mark_step()
+            logger.debug(f"{hp_layers}, {loss}, {numel}")
+
+        hp_layers = get_best_combination(combination_list, numel_list, loss_list)
+        logger.info(f"final hp layers: {hp_layers}")
+        for layer_name in hp_layers:
+            layer = get_module(block, layer_name)
+            layer.data_type, layer.bits, layer.sym = 'mx_fp8', 8, True
+            layer.act_data_type, layer.act_bits, layer.act_sym = 'mx_fp8', 8, True
+        gc.collect()
+        if is_optimum_habana_available():
+            htcore.mark_step()
+
+        # block.requires_grad_(True)
         quantized_layer_names, unquantized_layer_names = wrapper_block(
             block, self.enable_minmax_tuning, self.enable_norm_bias_tuning, device=self.device
         )
 
         round_params = []
         minmax_params = []
+        fp8_round_params = []
+        fp8_minmax_params = []
         for n, m in block.named_modules():
             if hasattr(m, "orig_layer"):
-                for key in m.params.keys():
-                    if "min" in key or "max" in key:
-                        minmax_params.append(m.params[key])
-                    else:
-                        round_params.append(m.params[key])
+                if m.orig_layer.data_type == "mx_fp8":
+                    for key in m.params.keys():
+                        if "min" in key or "max" in key:
+                            fp8_minmax_params.append(m.params[key])
+                        else:
+                            fp8_round_params.append(m.params[key])
+                else:
+                    for key in m.params.keys():
+                        if "min" in key or "max" in key:
+                            minmax_params.append(m.params[key])
+                        else:
+                            round_params.append(m.params[key])
 
-        if self.enable_minmax_tuning:
-            optimizer = self.optimizer(
-                [{"params": round_params}, {"params": minmax_params, "lr": self.minmax_lr}], lr=self.lr, weight_decay=0
-            )
-        else:
-            optimizer = self.optimizer(round_params, lr=self.lr, weight_decay=0)
-
-        if len(round_params) + len(minmax_params) <= 0:
+        if (len(round_params) + len(minmax_params) <= 0) and (len(fp8_round_params) + len(fp8_minmax_params) <= 0):
             dump_info = (
-                f"quantized {len(quantized_layer_names)}/{(len(quantized_layer_names) + len(unquantized_layer_names))} "
+                f"skipped tuning, quantized {len(quantized_layer_names)}/{(len(quantized_layer_names) + len(unquantized_layer_names))} "
                 f"layers in the block"
             )
             logger.info(dump_info)
@@ -2280,12 +2447,10 @@ class AutoRound(object):
             mv_module_from_gpu(block, self.low_cpu_mem_usage)
             return output, output
 
-        if self.lr_scheduler is None:
-            lr_schedule = torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=1.0, end_factor=0.0, total_iters=self.iters
-            )
-        else:
-            lr_schedule = copy.deepcopy(self.lr_scheduler)
+        ATRD_FP8_ALPHA = float(os.environ.get("ATRD_FP8_ALPHA", 1.0))
+        ATRD_FP4_ALPHA = float(os.environ.get("ATRD_FP4_ALPHA", 1.0))
+        optimizer, lr_schedule = self.build_optimizer_lr_schedule(round_params, minmax_params, alpha=ATRD_FP4_ALPHA)
+        fp8_optimizer, fp8_lr_schedule = self.build_optimizer_lr_schedule(fp8_round_params, fp8_minmax_params, alpha=ATRD_FP8_ALPHA)
 
         nsamples = len(input_ids)
         pick_samples = self.batch_size * self.gradient_accumulate_steps
@@ -2359,6 +2524,7 @@ class AutoRound(object):
                 if 0 < self.dynamic_max_gap <= i - last_best_iter:
                     break
             self.step(scaler, optimizer, lr_schedule)
+            self.step(scaler, fp8_optimizer, fp8_lr_schedule)
 
         last_loss = total_loss
         best_iter = self.iters

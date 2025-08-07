@@ -77,8 +77,8 @@ def quant_element(tensor, ebits, mbits, max_norm, mantissa_rounding="even"):
     return tensor
 
 
-@torch.compile()
-def quant_mx(tensor, bits=4, group_size=-1, v=0, max_scale=1.0, mantissa_rounding="even", data_type="mx_fp", **kwargs):
+def quant_mx(tensor, bits=4, group_size=-1, v=0, max_scale=1.0,
+             mantissa_rounding="even", data_type="mx_fp", **kwargs):
     """Quantize the given tensor using the specified parameters.
 
     This function performs quantization on the `tensor` tensor according to the
