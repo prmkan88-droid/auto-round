@@ -270,6 +270,7 @@ if __name__ == "__main__":
             print(f"Overall accuracy: {sum(all_accuracy.values())/len(all_accuracy):.4f}")
         else:
             model = torch.compile(model)
+            args.tasks = ["piqa", "hellaswag", "mmlu", "gsm8k"]
             all_accuracy = {}
             test_gsm8k = False
             test_normal = False

@@ -2759,6 +2759,7 @@ def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, inpu
             block = create_mp_block(block, mp_layers, self.recipe_mp_dtype)
             loss = get_loss(block)
             loss_ratio = loss / mxfp8_loss
+            logger.info(f"{mp_layers} loss: {loss_ratio}")
             if loss_ratio <= target_loss_ratio:
                 acceptable_op_num = r - 1
             else:
@@ -2771,23 +2772,22 @@ def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, inpu
             block = recover_mp_block(block, mp_layers, raw_dtype)
             if is_hpex_available():
                 htcore.mark_step()
-            # logger.info(f"{mp_layers}, {loss_ratio}, {avg_bits}")
-
-    # show details
-    # loss_ratio_list = [round(i, 6) for i in loss_ratio_list]
-    # logger.info(f"[Recipe Mode] Loss ratio list: {loss_ratio_list}")
-    # avg_bits_list = [round(i, 6) for i in avg_bits_list]
-    # logger.info(f"[Recipe Mode] Avg bits list: {avg_bits_list}")
+            logger.info(f"{mp_layers} avg_bits: {avg_bits}")
 
     # get best combination
+    best_loss_ratio = float("inf")
     best_bits = float("inf")
     best_combination = quantizable_layers
     for i, (loss_ratio, avg_bits) in enumerate(zip(loss_ratio_list, avg_bits_list)):
         if best_bits > avg_bits:
-            best_bits = avg_bits
+            best_bits = round(avg_bits, 3)
+            best_loss_ratio = round(loss_ratio, 3)
             best_combination = combination_list[i]
 
-    logger.info(f"[Recipe Mode] Mix precision layers in this block: {best_combination}")
+    logger.info(
+        "[Recipe Mode] Mix precision layers in this block: "
+        + f"{best_combination}: bits: {best_bits}, loss_ratio: {best_loss_ratio}"
+    )
     # generate output of quantized block of sample input_ids
     q_block = create_mp_block(block, mp_layers, self.recipe_mp_dtype)
     q_output = get_output(q_block, q_input_ids)
