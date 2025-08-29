@@ -438,7 +438,7 @@ class AutoRound(object):
             logger.warning("reset enable_torch_compile to `False` as fp8 is enabled")
 
         self.recipe_mode = False
-        self.recipe_results = {}
+        self.recipe_results = {"recipe": {}, "results": {}}
 
     def _set_device_map_in_blocks(self, device_map: Union[str, dict, None]) -> None:
         """Sets the device map for specific blocks in the model.

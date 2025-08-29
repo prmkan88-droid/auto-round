@@ -2664,11 +2664,19 @@ def _generate_recipe(
     self.recipe_mp_dtype = mp_dtype
     self.recipe_mp_config = mp_config
     self.quantize()
+    # combine self.layer_config with self.recipe_results["recipe"]
     recipe_layer_config = copy.deepcopy(self.layer_config)
-    recipe_layer_config.update(self.recipe_results)
+    recipe_layer_config.update(self.recipe_results["recipe"])
     self.recipe_mode = False
     recipe_layer_config.pop("lm_head")  # lm_head is not included in the recipe
-    return recipe_layer_config
+    self.recipe_results["recipe"] = recipe_layer_config
+    # dump average bits of all blocks
+    avg_bits_all_block = 0
+    for block_name, result in self.recipe_results["results"].items():
+        avg_bits_all_block += result["bits"]
+    avg_bits_all_block /= len(self.recipe_results["results"])
+    logger.info(f"[Recipe Mode] Average bits of all blocks: {round(avg_bits_all_block, 3)}")
+    return self.recipe_results
 
 
 def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, input_others):
@@ -2741,9 +2749,46 @@ def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, inpu
     mp_layers = quantizable_layers
     block = create_mp_block(block, mp_layers, self.recipe_mp_dtype)
     mxfp8_loss = get_loss(block)
+    mxfp8_bits = get_avg_bits(block)
     block = recover_mp_block(block, mp_layers, raw_dtype)
     if is_hpex_available():
         htcore.mark_step()
+
+    mp_layers = []
+    block = create_mp_block(block, mp_layers, self.recipe_mp_dtype)
+    mxfp4_loss = get_loss(block)
+    if is_hpex_available():
+        htcore.mark_step()
+    # early stop
+    if mxfp4_loss / mxfp8_loss < target_loss_ratio:
+        best_bits = get_avg_bits(block)
+        best_loss_ratio = mxfp4_loss / mxfp8_loss
+        best_combination = []
+        logger.info(
+            "[Recipe Mode] Mix precision layers in this block: "
+            + f"{best_combination}: bits: {best_bits}, loss_ratio: {best_loss_ratio}"
+        )
+        # update recipe and results
+        self.recipe_results["recipe"] = {}
+        for result in best_combination:
+            self.recipe_results["recipe"].update({block_name + "." + result: self.recipe_mp_dtype})
+        self.recipe_results["results"] = {
+            block_name: {
+                "mp_layers": best_combination,
+                "bits": best_bits,
+                "loss_ratio": best_loss_ratio,
+            }
+        }
+
+        # generate output of quantized block of sample input_ids
+        q_output = get_output(block, q_input_ids)
+        block = recover_mp_block(block, mp_layers, raw_dtype)
+        if is_hpex_available():
+            htcore.mark_step()
+
+        return reference_output, q_output
+    else:
+        block = recover_mp_block(block, mp_layers, raw_dtype)
 
     # traverse combination
     combination_list = []
@@ -2759,7 +2804,7 @@ def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, inpu
             block = create_mp_block(block, mp_layers, self.recipe_mp_dtype)
             loss = get_loss(block)
             loss_ratio = loss / mxfp8_loss
-            logger.info(f"{mp_layers} loss: {loss_ratio}")
+            logger.debug(f"{mp_layers} loss: {loss_ratio}")
             if loss_ratio <= target_loss_ratio:
                 acceptable_op_num = r - 1
             else:
@@ -2772,11 +2817,11 @@ def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, inpu
             block = recover_mp_block(block, mp_layers, raw_dtype)
             if is_hpex_available():
                 htcore.mark_step()
-            logger.info(f"{mp_layers} avg_bits: {avg_bits}")
+            logger.debug(f"{mp_layers} avg_bits: {avg_bits}")
 
     # get best combination
-    best_loss_ratio = float("inf")
-    best_bits = float("inf")
+    best_loss_ratio = 1.0
+    best_bits = mxfp8_bits
     best_combination = quantizable_layers
     for i, (loss_ratio, avg_bits) in enumerate(zip(loss_ratio_list, avg_bits_list)):
         if best_bits > avg_bits:
@@ -2788,14 +2833,23 @@ def _generate_block_recipe(self, block, block_name, input_ids, q_input_ids, inpu
         "[Recipe Mode] Mix precision layers in this block: "
         + f"{best_combination}: bits: {best_bits}, loss_ratio: {best_loss_ratio}"
     )
+    # update recipe and results
+    for result in best_combination:
+        self.recipe_results["recipe"].update({block_name + "." + result: self.recipe_mp_dtype})
+    self.recipe_results["results"].update(
+        {
+            block_name: {
+                "mp_layers": best_combination,
+                "bits": best_bits,
+                "loss_ratio": best_loss_ratio,
+            }
+        }
+    )
+
     # generate output of quantized block of sample input_ids
     q_block = create_mp_block(block, mp_layers, self.recipe_mp_dtype)
     q_output = get_output(q_block, q_input_ids)
     block = recover_mp_block(block, mp_layers, raw_dtype)
-    # update recipe results
-    for result in best_combination:
-        self.recipe_results.update({block_name + "." + result: self.recipe_mp_dtype})
-
     if is_hpex_available():
         htcore.mark_step()
 
