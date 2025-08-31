@@ -2700,7 +2700,8 @@ def _generate_block_recipe(self, block, block_name, block_num, input_ids, q_inpu
     sample_num = self.recipe_mp_config.get("sample_num", 8)
     target_loss_ratio = self.recipe_mp_config.get("target_loss_ratio", 1.02)
     block_id = int(block_name.split(".")[-1]) + 1
-    target_loss_ratio = 1 + (target_loss_ratio - 1) * (block_id / block_num)
+    # target_loss_ratio = 1 + (target_loss_ratio - 1) * (block_id / block_num)
+    target_loss_ratio = 1 + (target_loss_ratio - 1)
 
     # calculate the number of layers to use mix-precision
     quantizable_layers = [n for n, m in block.named_modules() if isinstance(m, SUPPORTED_LAYER_TYPES)]
