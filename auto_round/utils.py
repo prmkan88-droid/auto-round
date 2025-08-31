@@ -2663,10 +2663,11 @@ def _generate_recipe(
     self.recipe_mp_dtype = mp_dtype
     self.recipe_mp_config = mp_config
     self.quantize()
+    self.recipe_mode = False
     # combine self.layer_config with self.recipe_results["recipe"]
+    logger.info(f"[Recipe Mode] Mixed precision ops: {list(self.recipe_results['recipe'].keys())}")
     recipe_layer_config = copy.deepcopy(self.layer_config)
     recipe_layer_config.update(self.recipe_results["recipe"])
-    self.recipe_mode = False
     recipe_layer_config.pop("lm_head")  # lm_head is not included in the recipe
     self.recipe_results["recipe"] = recipe_layer_config
     # dump average bits of all blocks
@@ -2675,7 +2676,6 @@ def _generate_recipe(
         avg_bits_all_block += result["bits"]
     avg_bits_all_block /= len(self.recipe_results["results"])
     logger.info(f"[Recipe Mode] Average bits of all blocks: {round(avg_bits_all_block, 3)}")
-    logger.info(f"[Recipe Mode] Mixed precision ops: {list(self.recipe_results['recipe'].keys())}")
     return self.recipe_results
 
 
