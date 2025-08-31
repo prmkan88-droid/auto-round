@@ -2770,9 +2770,6 @@ def _generate_block_recipe(self, block, block_name, block_num, input_ids, q_inpu
             + f"{best_combination}: bits: {best_bits}, loss_ratio: {best_loss_ratio}"
         )
         # update recipe and results
-        self.recipe_results["recipe"] = {}
-        for result in best_combination:
-            self.recipe_results["recipe"].update({block_name + "." + result: self.recipe_mp_dtype})
         self.recipe_results["results"] = {
             block_name: {
                 "mp_layers": best_combination,
