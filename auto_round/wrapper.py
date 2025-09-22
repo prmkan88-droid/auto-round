@@ -91,6 +91,7 @@ class WrapperLinear(torch.nn.Module):
         self.orig_layer = orig_layer
         self.output_device = device
         self.device = self.orig_layer.tuning_device if hasattr(self.orig_layer, "tuning_device") else device
+        self.orig_layer.to(self.device)
         self.enable_minmax_tuning = enable_minmax_tuning
         self.enable_round_tuning = enable_round_tuning
         self.enable_norm_bias_tuning = enable_norm_bias_tuning and (orig_layer.bias is not None)

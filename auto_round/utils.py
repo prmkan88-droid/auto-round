@@ -567,7 +567,11 @@ def detect_device(device: Union[str, int, torch.device] = None) -> str:
     elif isinstance(device, torch.device):
         device = str(device)
     elif isinstance(device, str):  ## for cuda:0
-        device = device
+        if device =="tp":
+            if torch.cuda.is_available():
+                device = "cuda"
+        else:
+            device = device
     return device
 
 
