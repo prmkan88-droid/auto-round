@@ -92,6 +92,7 @@ from auto_round.utils import (
 )
 from auto_round.utils.device import (
     get_major_device,
+    is_memory_reached_threshold,
     set_auto_device_map_for_block_with_tuning,
     set_non_auto_device_map,
 )
@@ -2593,10 +2594,7 @@ class BaseCompressor(object):
 
                 total_loss += loss.item() / num_elm
                 self._scale_loss_and_backward(scaler, loss)
-
-                # Temporary change for 70B model OOM issue on XPU
-                # TODO: Remove after https://github.com/intel/torch-xpu-ops/issues/2232 is fixed
-                if torch.xpu.is_available() and self.low_gpu_mem_usage:
+                if is_memory_reached_threshold(0.85):
                     clear_memory()  # clean cached memory after backward
 
             if i == 0:

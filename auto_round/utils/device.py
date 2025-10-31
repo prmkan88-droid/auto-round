@@ -415,6 +415,54 @@ def clear_memory(tensor=None):
         _clear_memory_for_cpu_and_cuda(tensor)
 
 
+def is_memory_reached_threshold(threshold=0.85):
+    """Check all available devices and clear memory if any device is using close to the threshold.
+
+    Args:
+        threshold (float): Memory usage threshold (default: 0.85 for 85%).
+                            If any device exceeds this percentage, clear_memory() will be called.
+
+    Returns:
+        bool: True if memory was cleared, False otherwise.
+    """
+    # Check CUDA devices
+    if torch.cuda.is_available():
+        num_devices = torch.cuda.device_count()
+        for i in range(num_devices):
+            try:
+                total_memory = torch.cuda.get_device_properties(i).total_memory
+                allocated_memory = torch.cuda.memory_reserved(i)
+                memory_usage_ratio = allocated_memory / total_memory
+
+                if memory_usage_ratio >= threshold:
+                    logger.info(
+                        f"CUDA device {i}: Memory usage {memory_usage_ratio*100:.2f}% "
+                        f"exceeds threshold {threshold*100:.2f}%. Clearing memory..."
+                    )
+                    return True
+            except Exception as e:
+                logger.warning(f"Failed to check memory for CUDA device {i}: {e}")
+
+    # Check XPU devices if memory not yet cleared
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        num_devices = torch.xpu.device_count()
+        for i in range(num_devices):
+            try:
+                total_memory = torch.xpu.get_device_properties(i).total_memory
+                allocated_memory = torch.xpu.memory_allocated(i)
+                memory_usage_ratio = allocated_memory / total_memory
+
+                if memory_usage_ratio >= threshold:
+                    logger.info(
+                        f"XPU device {i}: Memory usage {memory_usage_ratio*100:.2f}% "
+                        f"exceeds threshold {threshold*100:.2f}%. Clearing memory..."
+                    )
+                    return True
+            except Exception as e:
+                logger.warning(f"Failed to check memory for XPU device {i}: {e}")
+    return False
+
+
 def check_memory_availability(device, inputs, weight, org_seqlen, org_bs):
     """Checks the availability of memory on the specified device for processing inputs using a given weight tensor.
 
