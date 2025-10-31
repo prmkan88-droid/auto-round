@@ -2750,6 +2750,7 @@ class BaseCompressor(object):
                 modules = [get_module(model, n) for n in names]
                 m = WrapperMultiblock(modules)
 
+            m.config = model.config if hasattr(model, "config") else None
             q_input, input_ids = quantize_block(
                 m,
                 input_ids,
